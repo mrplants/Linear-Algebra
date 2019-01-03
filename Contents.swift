@@ -1,9 +1,50 @@
 import Foundation
 import MetalPerformanceShaders
 
-let MINI_BATCH_SIZE = 1000
+let MINI_BATCH_SIZE = 100
 let NUM_EPOCHS = 100
 
+// UTILITY FUNCTIONS
+func imageFrom(dataMNIST:Data) -> CGImage? {
+	let width = 28
+	let height = 28
+	let image_pointer = UnsafeMutableRawPointer.allocate(byteCount: width * height, alignment: 1)
+	dataMNIST.withUnsafeBytes({(pointer:UnsafePointer<UInt8>) in
+		memcpy(image_pointer, pointer, width * height)
+	})
+	return CGImage(width: width,
+								 height: height,
+								 bitsPerComponent: 8,
+								 bitsPerPixel: 8,
+								 bytesPerRow: width,
+								 space: CGColorSpaceCreateDeviceGray(),
+								 bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+								 provider: CGDataProvider(dataInfo: nil,
+																					data: image_pointer,
+																					size: width * height,
+																					releaseData: { (info:UnsafeMutableRawPointer?, data:UnsafeRawPointer, size:Int) in
+																						data.deallocate()
+								})!,
+								 decode: nil,
+								 shouldInterpolate: false,
+								 intent: .defaultIntent)
+}
+
+func oneHotDataDescriptor(label:Int) -> MPSCNNLossDataDescriptor? {
+	// Create the label data
+	let oneHotLabels = UnsafeMutablePointer<Float>(calloc(10, MemoryLayout<Float>.size)?.assumingMemoryBound(to: Float.self))!
+	oneHotLabels[label] = 1
+	// Return the data descriptor
+	return MPSCNNLossDataDescriptor(data: Data(bytesNoCopy: oneHotLabels,
+																						 count: 10 * MemoryLayout<Float>.size,
+																						 deallocator: .custom({(pointer:UnsafeMutableRawPointer, count:Int) in
+																							pointer.deallocate()
+																						})),
+																	layout: .featureChannelsxHeightxWidth,
+																	size: MTLSize(width: 1, height: 1, depth: 10))
+}
+
+// STORAGE ACCESS
 struct MNISTTrainingLabels : Sequence, IteratorProtocol {
 	var m:Int
 	var labels:Data
@@ -59,60 +100,57 @@ struct MNISTTrainingImages : Sequence, IteratorProtocol {
 	}
 }
 
-// Create training data
-let trainingLabels = MNISTTrainingLabels("/Users/sean/Library/Mobile Documents/com~apple~CloudDocs/Development/Data/MNIST/train-labels.idx1-ubyte")
-let trainingImages = MNISTTrainingImages("/Users/sean/Library/Mobile Documents/com~apple~CloudDocs/Development/Data/MNIST/train-images.idx3-ubyte")
+struct MNISTMiniBatches : Sequence, IteratorProtocol {
+	var trainingLabels:MNISTTrainingLabels
+	var trainingImages:MNISTTrainingImages
+	var gpu:MTLDevice
+	var miniBatchSize:Int
+	var textures:MPSImage
+	var m:Int
+	var imageWidth:Int
+	var imageHeight:Int
+	
+	init(gpu:MTLDevice, miniBatchSize:Int) throws {
+		self.trainingLabels = try MNISTTrainingLabels(filename: "/Users/sean/Library/Mobile Documents/com~apple~CloudDocs/Development/Data/MNIST/train-labels.idx1-ubyte")
+		self.trainingImages = try MNISTTrainingImages(filename: "/Users/sean/Library/Mobile Documents/com~apple~CloudDocs/Development/Data/MNIST/train-images.idx3-ubyte")
+		self.m = self.trainingImages.m
+		self.imageWidth = self.trainingImages.width
+		self.imageHeight = self.trainingImages.height
+		self.gpu = gpu
+		self.miniBatchSize = miniBatchSize
+		self.textures = MPSImage(device: self.gpu,
+														 imageDescriptor: MPSImageDescriptor(channelFormat: .unorm8,
+																																 width: self.trainingImages.width,
+																																 height: self.trainingImages.height,
+																																 featureChannels: 1,
+																																 numberOfImages: self.miniBatchSize,
+																																 usage: .shaderRead))
+	}
+	
+	// Get the next training mini-batch
+	mutating func next() -> ([MPSCNNLossLabels], [MPSImage]) {
+		var lossLabels = [MPSCNNLossLabels]()
+		for miniBatchIndex in 0..<self.miniBatchSize {
+			// Load the images into a GPU texture
+			self.trainingImages.next()?.withUnsafeBytes {(pointer:UnsafePointer<UInt8>) in
+				self.textures.writeBytes(pointer,
+																 dataLayout: .featureChannelsxHeightxWidth,
+																 imageIndex: miniBatchIndex)
+			}
+			// Create and load the GPU loss labels
+				lossLabels.append(MPSCNNLossLabels(device: self.gpu,
+																					 labelsDescriptor: oneHotDataDescriptor(label: self.trainingLabels.next()!)!))
+
+		}
+		return (lossLabels, self.textures.batchRepresentation())
+	}
+}
 
 // Get the default GPU to create textures
 let default_GPU = MTLCreateSystemDefaultDevice()!
 
-let mini_batch_texture = MPSImage(device: default_GPU,
-																	imageDescriptor: MPSImageDescriptor(channelFormat: .unorm8,
-																																			width: image_width,
-																																			height: image_height,
-																																			featureChannels: 1,
-																																			numberOfImages: MINI_BATCH_SIZE,
-																																			usage: .shaderRead))
-func load_mini_batch(mini_batch_index:Int) -> [MPSCNNLossLabels] {
-	// Load the images into a GPU texture
-	image_file_body.withUnsafeBytes { (pointer:UnsafePointer<UInt8>) in
-		for image_index in (mini_batch_index*MINI_BATCH_SIZE)..<((mini_batch_index+1)*MINI_BATCH_SIZE) {
-			mini_batch_texture.writeBytes(UnsafeRawPointer(pointer.advanced(by: image_index*image_height*image_width)),
-																		dataLayout: .featureChannelsxHeightxWidth,
-																		imageIndex: image_index % MINI_BATCH_SIZE)
-		}
-	}
-	// Load the labels into a GPU state
-	var loss_labels = [MPSCNNLossLabels]()
-	for label_index in (mini_batch_index*MINI_BATCH_SIZE)..<((mini_batch_index+1)*MINI_BATCH_SIZE) {
-		let label_descriptor = MPSCNNLossDataDescriptor(data: Data(bytes: label_data.advanced(by: label_index*10), count: 10*MemoryLayout<Float>.size),
-																										layout: .featureChannelsxHeightxWidth,
-																										size: MTLSize(width: 1, height: 1, depth: 10))!
-		loss_labels.append(MPSCNNLossLabels(device: default_GPU,
-																				labelsDescriptor: label_descriptor))
-	}
-	return loss_labels
-}
-
-//let loss_labels = load_mini_batch(mini_batch_index: 0)
-//let image_pointer = UnsafeMutableRawPointer.allocate(byteCount: image_height*image_width, alignment: 1)
-//mini_batch_texture.readBytes(image_pointer,
-//								dataLayout: .featureChannelsxHeightxWidth,
-//								imageIndex: 0)
-//let color_space = CGColorSpaceCreateDeviceGray()
-//let provider = CGDataProvider(dataInfo: nil, data: image_pointer, size: image_height*image_width, releaseData: {_,_,_ in })!
-//let image = CGImage(width: image_width,
-//										height: image_height,
-//										bitsPerComponent: 8,
-//										bitsPerPixel: 8,
-//										bytesPerRow: image_width,
-//										space: color_space,
-//										bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
-//										provider: provider,
-//										decode: nil,
-//										shouldInterpolate: false,
-//										intent: .defaultIntent)
-//labels[0]
+// Retrieve training data
+var trainingMiniBatches = try MNISTMiniBatches(gpu: default_GPU, miniBatchSize: MINI_BATCH_SIZE)
 
 class MyCNNWeights: NSObject, MPSCNNConvolutionDataSource {
 	var my_weights:[Float]
@@ -122,7 +160,7 @@ class MyCNNWeights: NSObject, MPSCNNConvolutionDataSource {
 	var height:Int
 	var width:Int
 	var optimizer:MPSNNOptimizerStochasticGradientDescent
-
+	
 	init(width:Int, height:Int, input_depth:Int, output_depth:Int, previous_layer_size:Int) {
 		self.width = width
 		self.height = height
@@ -242,9 +280,9 @@ func trainingIteration(_ mini_batch_number:Int) -> MTLCommandBuffer? {
 	doubleBufferSemaphore.wait(timeout: .distantFuture)
 	guard let command_buffer = command_queue?.makeCommandBuffer() else { return nil}
 	// Encode a batch of images for training
-	let labels = load_mini_batch(mini_batch_index: mini_batch_number)
+	let (labels, images) = trainingMiniBatches.next()
 	training_graph.encodeBatch(to: command_buffer,
-														 sourceImages: [mini_batch_texture.batchRepresentation()],
+														 sourceImages: [images],
 														 sourceStates: [labels])
 	command_buffer.addCompletedHandler { commandBuffer in
 		// Callback is called when GPU is done executing the graph (outputBatch is ready)
@@ -259,7 +297,7 @@ var latest_command_buffer:MTLCommandBuffer? = nil
 // NUM_EPOCHS is the number of times we iterate over an entire dataset
 // NUM_ITERATIONS_PER_EPOCH is the number of images in a dataset, divided by batch size
 for i in 0..<NUM_EPOCHS {
-	for j in 0..<number_labels/MINI_BATCH_SIZE {
+	for j in 0..<trainingMiniBatches.m/MINI_BATCH_SIZE {
 		latest_command_buffer = trainingIteration(j);
 	}
 	// TODO: Print/Save loss and accuracy

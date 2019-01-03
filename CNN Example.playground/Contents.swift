@@ -138,9 +138,9 @@ struct MNISTMiniBatches : Sequence, IteratorProtocol {
 																 imageIndex: miniBatchIndex)
 			}
 			// Create and load the GPU loss labels
-				lossLabels.append(MPSCNNLossLabels(device: self.gpu,
-																					 labelsDescriptor: oneHotDataDescriptor(label: self.trainingLabels.next()!)!))
-
+			lossLabels.append(MPSCNNLossLabels(device: self.gpu,
+																				 labelsDescriptor: oneHotDataDescriptor(label: self.trainingLabels.next()!)!))
+			
 		}
 		return (lossLabels, self.textures.batchRepresentation())
 	}
