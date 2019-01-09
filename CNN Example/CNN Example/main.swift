@@ -1,3 +1,11 @@
+//
+//  main.swift
+//  CNN Example
+//
+//  Created by Sean Fitzgerald on 1/3/19.
+//  Copyright © 2019 Sean Fitzgerald. All rights reserved.
+//
+
 import Foundation
 import MetalPerformanceShaders
 
@@ -10,7 +18,7 @@ func imageFrom(dataMNIST:Data) -> CGImage? {
 	let width = 28
 	let height = 28
 	let image_pointer = UnsafeMutableRawPointer.allocate(byteCount: width * height, alignment: 1)
-	dataMNIST.withUnsafeBytes({(pointer:UnsafePointer<UInt8>) in
+	_ = dataMNIST.withUnsafeBytes({(pointer:UnsafePointer<UInt8>) in
 		memcpy(image_pointer, pointer, width * height)
 	})
 	return CGImage(width: width,
@@ -34,7 +42,7 @@ func imageFrom(dataMNIST:Data) -> CGImage? {
 // STORAGE ACCESS
 struct MNISTTrainingLabels : Sequence, IteratorProtocol {
 	var m:Int
-	var labels:[Float]?
+	var labels:[Int]
 	var index = 0
 	
 	// Initialize with the location of the MNIST data file
@@ -47,35 +55,24 @@ struct MNISTTrainingLabels : Sequence, IteratorProtocol {
 			return Int(CFSwapInt32BigToHost(pointer[1]))
 		}
 		// Get the labels
-		loadOneHotLabels(fileBodyData: labelFileData.subdata(in: MemoryLayout<Int32>.size*2..<labelFileData.count))
+		self.labels = [Int](repeating: 0, count: self.m)
+		loadLabels(fileBodyData: labelFileData.subdata(in: MemoryLayout<Int32>.size*2..<labelFileData.count))
 	}
 	// Create one-hot labels from the input data
-	mutating func loadOneHotLabels(fileBodyData:Data) {
+	mutating func loadLabels(fileBodyData:Data) {
 		// Set the labels array to all zeros
-		self.labels = [Float].init(repeating: 0, count: self.m * 10)
 		fileBodyData.withUnsafeBytes { (pointer:UnsafePointer<UInt8>) in
 			for labelIndex in 0..<self.m {
-				// Apply one-hot encoding based on the label data
-				self.labels?[labelIndex*10+Int(pointer[labelIndex])] = 1
+				self.labels[labelIndex] = Int(pointer[labelIndex])
 			}
 		}
 	}
 	// Returns the next training pair
-	mutating func next() -> MPSCNNLossDataDescriptor? {
+	mutating func next() -> [Float]? {
 		// Construct the one-hot label array
-		guard var labels = self.labels else { return nil }
-		let lossDescriptor = MPSCNNLossDataDescriptor(data: Data(bytesNoCopy: &(labels[(self.index*10)..<((self.index+1)*10)]),
-																														 count: 10 * MemoryLayout<Float>.size,
-																														 deallocator: .none),
-																									layout: .featureChannelsxHeightxWidth,
-																									size: MTLSize(width: 1, height: 1, depth: 10))
-		self.index += 1
-		return lossDescriptor
-	}
-	func currentOneHotLabel() -> [Float]? {
-		if self.index == 0 {return nil}
-		guard let labels = self.labels?[((self.index-1)*10)..<(self.index*10)] else {return nil}
-		return Array(labels)
+		var oneHotLabels = [Float](repeating: 0, count: 10)
+		oneHotLabels[self.labels[index]] = 1.0
+		return oneHotLabels
 	}
 }
 
@@ -85,7 +82,7 @@ struct MNISTTrainingImages : Sequence, IteratorProtocol {
 	var height:Int
 	var images:Data
 	var index = 0
-	
+
 	// Initialize with the location of the MNIST data file
 	init(filename:String) throws {
 		let image_file_data = try Data(contentsOf: URL(fileURLWithPath: filename))
@@ -100,7 +97,7 @@ struct MNISTTrainingImages : Sequence, IteratorProtocol {
 		self.images = image_file_data.subdata(in: MemoryLayout<Int32>.size*4..<image_file_data.count)
 	}
 	mutating func next() -> Data? {
-		let image = self.images.subdata(in: self.index*self.height*self.width..<(self.index+1)*self.height*self.width)
+		let image = self.images[self.index*self.height*self.width..<(self.index+1)*self.height*self.width]
 		self.index += 1
 		return image
 	}
@@ -111,57 +108,45 @@ struct MNISTMiniBatches : Sequence, IteratorProtocol {
 	var trainingImages:MNISTTrainingImages
 	var gpu:MTLDevice
 	var miniBatchSize:Int
-	var textures:MPSImage
-	var m:Int
-	var imageWidth:Int
-	var imageHeight:Int
-	
-	//DEBUG
-	var loaded = false
 	
 	init(gpu:MTLDevice, miniBatchSize:Int) throws {
 		self.trainingLabels = try MNISTTrainingLabels(filename: "/Users/sean/Library/Mobile Documents/com~apple~CloudDocs/Development/Data/MNIST/train-labels.idx1-ubyte")
 		self.trainingImages = try MNISTTrainingImages(filename: "/Users/sean/Library/Mobile Documents/com~apple~CloudDocs/Development/Data/MNIST/train-images.idx3-ubyte")
-		self.m = self.trainingImages.m
-		self.imageWidth = self.trainingImages.width
-		self.imageHeight = self.trainingImages.height
 		self.gpu = gpu
 		self.miniBatchSize = miniBatchSize
-		self.textures = MPSImage(device: self.gpu,
-														 imageDescriptor: MPSImageDescriptor(channelFormat: .unorm8,
-																																 width: self.trainingImages.width,
-																																 height: self.trainingImages.height,
-																																 featureChannels: 1,
-																																 numberOfImages: self.miniBatchSize,
-																																 usage: .shaderRead))
+	}
+	
+	mutating func reset() throws {
+		self.trainingLabels = try MNISTTrainingLabels(filename: "/Users/sean/Library/Mobile Documents/com~apple~CloudDocs/Development/Data/MNIST/train-labels.idx1-ubyte")
+		self.trainingImages = try MNISTTrainingImages(filename: "/Users/sean/Library/Mobile Documents/com~apple~CloudDocs/Development/Data/MNIST/train-images.idx3-ubyte")
 	}
 	
 	// Get the next training mini-batch
 	mutating func next() -> ([MPSCNNLossLabels], [MPSImage])? {
-		var lossLabels = [MPSCNNLossLabels]()
-		for miniBatchIndex in 0..<self.miniBatchSize {
+		var images = [MPSImage]()
+		var labels = [MPSCNNLossLabels]()
+		for _ in 0..<self.miniBatchSize {
 			// Load the images into a GPU texture
-			if !self.loaded {
-				self.trainingImages.next()?.withUnsafeBytes {(pointer:UnsafePointer<UInt8>) in
-					self.textures.writeBytes(pointer,
-																	 dataLayout: .featureChannelsxHeightxWidth, 
-																	 imageIndex: miniBatchIndex)
-				}
+			self.trainingImages.next()?.withUnsafeBytes {(pointer:UnsafePointer<UInt8>) in
+				let image = MPSImage(device: self.gpu,
+														 imageDescriptor: MPSImageDescriptor(channelFormat: .unorm8,
+																																 width: self.trainingImages.width,
+																																 height: self.trainingImages.height,
+																																 featureChannels: 1))
+				image.writeBytes(pointer,
+												 dataLayout: .HeightxWidthxFeatureChannels,
+												 imageIndex: 0)
+				images.append(image)
 			}
-			// Create and load the GPU loss labels
-			lossLabels.append(MPSCNNLossLabels(device: self.gpu,
-																				 labelsDescriptor: self.trainingLabels.next()!))
+			labels.append(MPSCNNLossLabels(device: self.gpu,
+																		 labelsDescriptor: MPSCNNLossDataDescriptor(data: Data(bytes: UnsafeRawPointer(self.trainingLabels.next()!),
+																																													 count: MemoryLayout<Float>.size*10),
+																																								layout: .HeightxWidthxFeatureChannels,
+																																								size: MTLSize(width: 1, height: 1, depth: 10))!))
 		}
-		self.loaded = true
-		return (lossLabels, self.textures.batchRepresentation())
+		return (labels, images)
 	}
 }
-
-// Get the default GPU to create textures
-let default_GPU = MTLCreateSystemDefaultDevice()!
-
-// Retrieve training data
-var trainingMiniBatches = try MNISTMiniBatches(gpu: default_GPU, miniBatchSize: MINI_BATCH_SIZE)
 
 class MyCNNWeights: NSObject, MPSCNNConvolutionDataSource {
 	var my_weights:[Float]
@@ -171,18 +156,21 @@ class MyCNNWeights: NSObject, MPSCNNConvolutionDataSource {
 	var height:Int
 	var width:Int
 	var optimizer:MPSNNOptimizerStochasticGradientDescent
+	var gpu:MTLDevice
 	
-	init(width:Int, height:Int, input_depth:Int, output_depth:Int, previous_layer_size:Int) {
+	init(gpu:MTLDevice, width:Int, height:Int, input_depth:Int, output_depth:Int, previous_layer_size:Int) {
 		self.width = width
 		self.height = height
 		self.input_depth = input_depth
 		self.output_depth = output_depth
 		self.previous_layer_size = previous_layer_size
-		self.optimizer = MPSNNOptimizerStochasticGradientDescent(device: default_GPU, learningRate: 0.01)
+		self.gpu = gpu
+		self.optimizer = MPSNNOptimizerStochasticGradientDescent(device: gpu, learningRate: 0.01)
 		self.my_weights = (0...width*height*output_depth).map { _ in Float.random(in: 0...1)*sqrtf(Float(2.0)/Float(previous_layer_size)) }
 	}
 	func copy(with zone: NSZone? = nil) -> Any {
-		let my_copy = MyCNNWeights(width: self.width,
+		let my_copy = MyCNNWeights(gpu:self.gpu,
+															 width: self.width,
 															 height: self.height,
 															 input_depth: self.input_depth,
 															 output_depth: self.output_depth,
@@ -236,36 +224,41 @@ class MyCNNWeights: NSObject, MPSCNNConvolutionDataSource {
 // Create the backpropogation graph
 // LOSS  -> SOFTMAX -> FC -> DROPOUT -> ReLU -> FC -> MAXPOOL -> ReLU -> CONV -> MAXPOOL -> ReLU -> CONV
 
-func forward_pass_graph() -> [MPSNNFilterNode] {
-	let conv1 = MPSCNNConvolutionNode(source: MPSNNImageNode(handle: nil), weights: MyCNNWeights(width: 9,
-																																															 height: 9,
-																																															 input_depth: 1,
-																																															 output_depth: 3,
-																																															 previous_layer_size: 28*28*1))
-	let relu1 = MPSCNNNeuronReLUNode(source: conv1.resultImage)
-	let pool1 = MPSCNNPoolingMaxNode(source: relu1.resultImage, filterSize: 2)
-	let conv2 = MPSCNNConvolutionNode(source: pool1.resultImage, weights: MyCNNWeights(width: 5,
-																																										 height: 5,
-																																										 input_depth: 3,
-																																										 output_depth: 5,
-																																										 previous_layer_size: 10*10*3))
-	let relu2 = MPSCNNNeuronReLUNode(source: conv2.resultImage)
-	let pool2 = MPSCNNPoolingMaxNode(source: relu2.resultImage, filterSize: 2)
-	let fc1 = MPSCNNFullyConnectedNode(source: pool2.resultImage, weights: MyCNNWeights(width: 3,
-																																											height: 3,
-																																											input_depth: 5,
-																																											output_depth: 15,
-																																											previous_layer_size: 3*3*5))
+func forward_pass_graph(gpu:MTLDevice) -> [MPSNNFilterNode] {
+//	let conv1 = MPSCNNConvolutionNode(source: MPSNNImageNode(handle: nil), weights: MyCNNWeights(gpu:gpu,
+//																																															 width: 9,
+//																																															 height: 9,
+//																																															 input_depth: 1,
+//																																															 output_depth: 5,
+//																																															 previous_layer_size: 28*28*1))
+//	let relu1 = MPSCNNNeuronReLUNode(source: conv1.resultImage)
+//	let pool1 = MPSCNNPoolingMaxNode(source: relu1.resultImage, filterSize: 2)
+//	let conv2 = MPSCNNConvolutionNode(source: pool1.resultImage, weights: MyCNNWeights(gpu:gpu,
+//																																										 width: 5,
+//																																										 height: 5,
+//																																										 input_depth: 5,
+//																																										 output_depth: 5,
+//																																										 previous_layer_size: 10*10*5))
+//	let relu2 = MPSCNNNeuronReLUNode(source: conv2.resultImage)
+//	let pool2 = MPSCNNPoolingMaxNode(source: relu2.resultImage, filterSize: 2)
+	let fc1 = MPSCNNFullyConnectedNode(source: MPSNNImageNode(handle: nil)/*pool2.resultImage*/, weights: MyCNNWeights(gpu:gpu,
+																																											width: 28,
+																																											height: 28,
+																																											input_depth: 1,
+																																											output_depth: 300,
+																																											previous_layer_size: 28*28))
 	let relu3 = MPSCNNNeuronReLUNode(source: fc1.resultImage)
-	let fc2 = MPSCNNFullyConnectedNode(source: relu3.resultImage, weights: MyCNNWeights(width: 1,
+	let fc2 = MPSCNNFullyConnectedNode(source: relu3.resultImage, weights: MyCNNWeights(gpu:gpu,
+																																											width: 1,
 																																											height: 1,
-																																											input_depth: 15,
+																																											input_depth: 300,
 																																											output_depth: 10,
-																																											previous_layer_size: 15))
+																																											previous_layer_size: 300))
 	let softmax = MPSCNNSoftMaxNode(source: fc2.resultImage)
-	return [conv1, relu1, pool1, conv2, relu2, pool2, fc1, relu3, fc2, softmax]
+	return [/*conv1, relu1, pool1, conv2, relu2, pool2,*/ fc1, relu3, fc2, softmax]
 }
-let lossDescriptor = MPSCNNLossDescriptor(type: .categoricalCrossEntropy, reductionType: .mean)
+let lossDescriptor = MPSCNNLossDescriptor(type: .softMaxCrossEntropy, reductionType: .mean)
+lossDescriptor.numberOfClasses = 10
 func backprop_graph(forward_graph:[MPSNNFilterNode]) -> [MPSNNFilterNode] {
 	var return_graph = forward_graph
 	return_graph.append(MPSCNNLossNode(source: forward_graph.last!.resultImage, lossDescriptor: lossDescriptor))
@@ -275,34 +268,39 @@ func backprop_graph(forward_graph:[MPSNNFilterNode]) -> [MPSNNFilterNode] {
 	}
 	return return_graph
 }
-func make_inference_graph() -> MPSNNImageNode {
-	let forward_graph = forward_pass_graph()
+func make_inference_graph(gpu:MTLDevice) -> MPSNNImageNode {
+	let forward_graph = forward_pass_graph(gpu: gpu)
 	return forward_graph.last!.resultImage
 }
-func make_training_graph() -> MPSNNImageNode {
-	let training_graph = backprop_graph(forward_graph: forward_pass_graph())
+func make_training_graph(gpu:MTLDevice) -> MPSNNImageNode {
+	let training_graph = backprop_graph(forward_graph: forward_pass_graph(gpu: gpu))
 	return training_graph.last!.resultImage
 }
 
+// Get the default GPU to create textures
+let default_GPU = MTLCreateSystemDefaultDevice()!
+
+// Retrieve training data
+var trainingMiniBatches = try MNISTMiniBatches(gpu: default_GPU, miniBatchSize: MINI_BATCH_SIZE)
+let training_graph = MPSNNGraph(device: default_GPU, resultImage: make_training_graph(gpu: default_GPU), resultImageIsNeeded: false)!
 let command_queue = default_GPU.makeCommandQueue()
-let training_graph = MPSNNGraph(device: default_GPU, resultImage: make_training_graph(), resultImageIsNeeded: false)!
 
 // Execute Graph in a Training Loop with Double Buffering
-let doubleBufferSemaphore = DispatchSemaphore(value: 2)
-func trainingIteration() -> MTLCommandBuffer? {
-	doubleBufferSemaphore.wait(timeout: .distantFuture)
-	guard let command_buffer = command_queue?.makeCommandBuffer() else { return nil }
+//let doubleBufferSemaphore = DispatchSemaphore(value: 1)
+func trainingIteration() throws {
+//	_ = doubleBufferSemaphore.wait(timeout: .distantFuture)
+	guard let command_buffer = command_queue?.makeCommandBufferWithUnretainedReferences() else { return }
 	// Encode a batch of images for training
-	guard let (labels, images) = trainingMiniBatches.next() else { return nil }
+	guard let (labels, images) = trainingMiniBatches.next() else { return }
 	training_graph.encodeBatch(to: command_buffer,
 														 sourceImages: [images],
 														 sourceStates: [labels])
-	command_buffer.addCompletedHandler { commandBuffer in
-		// Callback is called when GPU is done executing the graph (outputBatch is ready)
-		doubleBufferSemaphore.signal()
-	}
+//	command_buffer.addCompletedHandler { commandBuffer in
+//		// Callback is called when GPU is done executing the graph (outputBatch is ready)
+//		doubleBufferSemaphore.signal()
+//	}
 	command_buffer.commit()
-	return command_buffer
+	command_buffer.waitUntilCompleted()
 }
 
 var latest_command_buffer:MTLCommandBuffer? = nil
@@ -310,13 +308,14 @@ var latest_command_buffer:MTLCommandBuffer? = nil
 // NUM_EPOCHS is the number of times we iterate over an entire dataset
 // NUM_ITERATIONS_PER_EPOCH is the number of images in a dataset, divided by batch size
 for i in 0..<NUM_EPOCHS {
-	for _ in 0..<trainingMiniBatches.m/MINI_BATCH_SIZE {
-		latest_command_buffer = trainingIteration();
-		print("mini-batch finished")
+	for j in 0..<60000/MINI_BATCH_SIZE {
+		try trainingIteration();
+		if j % 10 == 0 { print("mini-batch finished " + String(j)) }
 	}
 	// TODO: Print/Save loss and accuracy
 	// TODO: Time the epochs
-	latest_command_buffer!.waitUntilCompleted()
+//	latest_command_buffer!.waitUntilCompleted()
 	print("Completed epoch number " + String(i))
+	try trainingMiniBatches.reset()
 }
 

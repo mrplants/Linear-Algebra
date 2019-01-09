@@ -1,7 +1,7 @@
 import Foundation
 import MetalPerformanceShaders
 
-let MINI_BATCH_SIZE = 100
+let MINI_BATCH_SIZE = 1000
 let NUM_EPOCHS = 100
 
 // UTILITY FUNCTIONS
@@ -30,46 +30,49 @@ func imageFrom(dataMNIST:Data) -> CGImage? {
 								 intent: .defaultIntent)
 }
 
-func oneHotDataDescriptor(label:Int) -> MPSCNNLossDataDescriptor? {
-	// Create the label data
-	let oneHotLabels = UnsafeMutablePointer<Float>(calloc(10, MemoryLayout<Float>.size)?.assumingMemoryBound(to: Float.self))!
-	oneHotLabels[label] = 1
-	// Return the data descriptor
-	return MPSCNNLossDataDescriptor(data: Data(bytesNoCopy: oneHotLabels,
-																						 count: 10 * MemoryLayout<Float>.size,
-																						 deallocator: .custom({(pointer:UnsafeMutableRawPointer, count:Int) in
-																							pointer.deallocate()
-																						})),
-																	layout: .featureChannelsxHeightxWidth,
-																	size: MTLSize(width: 1, height: 1, depth: 10))
-}
-
 // STORAGE ACCESS
 struct MNISTTrainingLabels : Sequence, IteratorProtocol {
 	var m:Int
-	var labels:Data
+	var labels:[Float]?
 	var index = 0
 	
 	// Initialize with the location of the MNIST data file
 	init(filename:String) throws {
 		// Read the label file and separate between header and body
-		let label_file_data = try Data(contentsOf: URL(fileURLWithPath: filename))
-		let label_file_header = label_file_data.subdata(in: 0..<MemoryLayout<Int32>.size*2)
+		let labelFileData = try Data(contentsOf: URL(fileURLWithPath: filename))
+		let labelFileHeader = labelFileData.subdata(in: 0..<MemoryLayout<Int32>.size*2)
 		// Read the header for the number of labels
-		self.m = label_file_header.withUnsafeBytes { (pointer:UnsafePointer<UInt32>) -> Int in
+		self.m = labelFileHeader.withUnsafeBytes { (pointer:UnsafePointer<UInt32>) -> Int in
 			return Int(CFSwapInt32BigToHost(pointer[1]))
 		}
 		// Get the labels
-		self.labels = label_file_data.subdata(in: MemoryLayout<Int32>.size*2..<label_file_data.count)
+		loadOneHotLabels(fileBodyData: labelFileData.subdata(in: MemoryLayout<Int32>.size*2..<labelFileData.count))
+	}
+	// Create one-hot labels from the input data
+	mutating func loadOneHotLabels(fileBodyData:Data) {
+		// Set the labels array to all zeros
+		self.labels = [Float].init(repeating: 0, count: self.m * 10)
+		fileBodyData.withUnsafeBytes { (pointer:UnsafePointer<UInt8>) in
+			for labelIndex in 0..<self.m {
+				// Apply one-hot encoding based on the label data
+				self.labels?[labelIndex*10+Int(pointer[labelIndex])] = 1
+			}
+		}
 	}
 	// Returns the next training pair
-	mutating func next() -> Int? {
+	mutating func next() -> MPSCNNLossDataDescriptor? {
 		// Construct the one-hot label array
-		return self.labels.withUnsafeBytes { (pointer:UnsafePointer<UInt8>) in
-			let label = Int(pointer[self.index])
-			self.index += 1
-			return label
-		}
+		guard var labels = self.labels else { return nil }
+		let lossDescriptor = MPSCNNLossDataDescriptor(data: Data(bytesNoCopy: &(labels[(self.index*10)..<((self.index+1)*10)]),
+																														 count: 10 * MemoryLayout<Float>.size,
+																														 deallocator: .none),
+																									layout: .featureChannelsxHeightxWidth,
+																									size: MTLSize(width: 1, height: 1, depth: 10))
+		self.index += 1
+		return lossDescriptor
+	}
+	func currentOneHotLabel() -> [Float]? {
+		return self.labels?[((self.index-1)*10)..<(self.index*10)]
 	}
 }
 
@@ -110,6 +113,8 @@ struct MNISTMiniBatches : Sequence, IteratorProtocol {
 	var imageWidth:Int
 	var imageHeight:Int
 	
+	// TODO: State is saved in the RAM.  Create a minibatch of label data once and then continue to reference it with the same loss data descriptor.
+	
 	init(gpu:MTLDevice, miniBatchSize:Int) throws {
 		self.trainingLabels = try MNISTTrainingLabels(filename: "/Users/sean/Library/Mobile Documents/com~apple~CloudDocs/Development/Data/MNIST/train-labels.idx1-ubyte")
 		self.trainingImages = try MNISTTrainingImages(filename: "/Users/sean/Library/Mobile Documents/com~apple~CloudDocs/Development/Data/MNIST/train-images.idx3-ubyte")
@@ -128,7 +133,7 @@ struct MNISTMiniBatches : Sequence, IteratorProtocol {
 	}
 	
 	// Get the next training mini-batch
-	mutating func next() -> ([MPSCNNLossLabels], [MPSImage]) {
+	mutating func next() -> ([MPSCNNLossLabels], [MPSImage])? {
 		var lossLabels = [MPSCNNLossLabels]()
 		for miniBatchIndex in 0..<self.miniBatchSize {
 			// Load the images into a GPU texture
@@ -137,10 +142,10 @@ struct MNISTMiniBatches : Sequence, IteratorProtocol {
 																 dataLayout: .featureChannelsxHeightxWidth,
 																 imageIndex: miniBatchIndex)
 			}
+			
 			// Create and load the GPU loss labels
-				lossLabels.append(MPSCNNLossLabels(device: self.gpu,
-																					 labelsDescriptor: oneHotDataDescriptor(label: self.trainingLabels.next()!)!))
-
+			lossLabels.append(MPSCNNLossLabels(device: self.gpu,
+																				 labelsDescriptor: self.trainingLabels.next()!))
 		}
 		return (lossLabels, self.textures.batchRepresentation())
 	}
@@ -151,6 +156,8 @@ let default_GPU = MTLCreateSystemDefaultDevice()!
 
 // Retrieve training data
 var trainingMiniBatches = try MNISTMiniBatches(gpu: default_GPU, miniBatchSize: MINI_BATCH_SIZE)
+
+
 
 class MyCNNWeights: NSObject, MPSCNNConvolutionDataSource {
 	var my_weights:[Float]
@@ -278,9 +285,11 @@ let training_graph = MPSNNGraph(device: default_GPU, resultImage: make_training_
 let doubleBufferSemaphore = DispatchSemaphore(value: 2)
 func trainingIteration(_ mini_batch_number:Int) -> MTLCommandBuffer? {
 	doubleBufferSemaphore.wait(timeout: .distantFuture)
-	guard let command_buffer = command_queue?.makeCommandBuffer() else { return nil}
+	guard let command_buffer = command_queue?.makeCommandBuffer() else { return nil }
 	// Encode a batch of images for training
-	let (labels, images) = trainingMiniBatches.next()
+	print("about to load mini-batch")
+	guard let (labels, images) = trainingMiniBatches.next() else { return nil }
+	print("mini-batch loaded")
 	training_graph.encodeBatch(to: command_buffer,
 														 sourceImages: [images],
 														 sourceStates: [labels])
@@ -299,6 +308,7 @@ var latest_command_buffer:MTLCommandBuffer? = nil
 for i in 0..<NUM_EPOCHS {
 	for j in 0..<trainingMiniBatches.m/MINI_BATCH_SIZE {
 		latest_command_buffer = trainingIteration(j);
+		print("mini-batch finished")
 	}
 	// TODO: Print/Save loss and accuracy
 	// TODO: Time the epochs
@@ -306,8 +316,3 @@ for i in 0..<NUM_EPOCHS {
 	print("Completed epoch number " + String(i))
 }
 
-
-
-
-
-label_data.deallocate()
