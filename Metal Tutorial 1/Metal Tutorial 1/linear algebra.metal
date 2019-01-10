@@ -17,5 +17,5 @@ kernel void hadamardProductKernel(texture_buffer<float, access::read> A [[textur
 																	texture_buffer<float, access::read> B [[texture(1)]],
 																	texture_buffer<float, access::write> C [[texture(2)]],
 																	uint gid [[thread_position_in_grid]]) {
-	C.write(A.read(gid) * B.read(gid), gid)
+	C.write(A.read(gid) * B.read(gid), gid);
 }
