@@ -7,9 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		1433FE5C21E56DC800BCD17A /* linear algebra.metal in Sources */ = {isa = PBXBuildFile; fileRef = 1433FE5B21E56DC800BCD17A /* linear algebra.metal */; };
+		1433FE5C21E56DC800BCD17A /* LinearAlgebra.metal in Sources */ = {isa = PBXBuildFile; fileRef = 1433FE5B21E56DC800BCD17A /* LinearAlgebra.metal */; };
 		14806F6021E3D382002A4702 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14806F5F21E3D382002A4702 /* main.swift */; };
-		14806F6721E44FB8002A4702 /* grayscale.metal in Sources */ = {isa = PBXBuildFile; fileRef = 14806F6621E44FB8002A4702 /* grayscale.metal */; };
 		14C30DBF21E5A16000B5CAC0 /* Matrix.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14C30DBE21E5A16000B5CAC0 /* Matrix.swift */; };
 /* End PBXBuildFile section */
 
@@ -26,12 +25,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		1433FE5B21E56DC800BCD17A /* linear algebra.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = "linear algebra.metal"; sourceTree = "<group>"; };
+		1433FE5B21E56DC800BCD17A /* LinearAlgebra.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = LinearAlgebra.metal; sourceTree = "<group>"; };
 		14806F5C21E3D382002A4702 /* Metal Tutorial 1 */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "Metal Tutorial 1"; sourceTree = BUILT_PRODUCTS_DIR; };
 		14806F5F21E3D382002A4702 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		14806F6621E44FB8002A4702 /* grayscale.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = grayscale.metal; sourceTree = "<group>"; };
 		14806F6821E4550A002A4702 /* Lenna.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Lenna.png; sourceTree = "<group>"; };
 		14C30DBE21E5A16000B5CAC0 /* Matrix.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Matrix.swift; sourceTree = "<group>"; };
+		14C30DC021E6D74800B5CAC0 /* ShaderHelper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ShaderHelper.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -67,8 +66,8 @@
 				14806F6821E4550A002A4702 /* Lenna.png */,
 				14806F5F21E3D382002A4702 /* main.swift */,
 				14C30DBE21E5A16000B5CAC0 /* Matrix.swift */,
-				14806F6621E44FB8002A4702 /* grayscale.metal */,
-				1433FE5B21E56DC800BCD17A /* linear algebra.metal */,
+				1433FE5B21E56DC800BCD17A /* LinearAlgebra.metal */,
+				14C30DC021E6D74800B5CAC0 /* ShaderHelper.h */,
 			);
 			path = "Metal Tutorial 1";
 			sourceTree = "<group>";
@@ -131,8 +130,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				14C30DBF21E5A16000B5CAC0 /* Matrix.swift in Sources */,
-				14806F6721E44FB8002A4702 /* grayscale.metal in Sources */,
-				1433FE5C21E56DC800BCD17A /* linear algebra.metal in Sources */,
+				1433FE5C21E56DC800BCD17A /* LinearAlgebra.metal in Sources */,
 				14806F6021E3D382002A4702 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

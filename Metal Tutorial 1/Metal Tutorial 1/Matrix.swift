@@ -8,19 +8,39 @@
 
 import Foundation
 import Metal
+// TODO: Include ShaderHelper.h using an objective-C bridging header
+// FUTURE TODO: allow arbitrary number of axes
 
 struct Matrix {
 	// Static Properties
 	static let GPU = MTLCreateSystemDefaultDevice()
 	static let CommandQueue = Matrix.GPU?.makeCommandQueue()
 	static let DefaultLibrary = Matrix.GPU?.makeDefaultLibrary()
+	// Matrix-Matrix Kernels
 	static let HadamardKernel = Matrix.DefaultLibrary?.makeFunction(name: "hadamardProductKernel")
-	
+	static let SubtractKernel = Matrix.DefaultLibrary?.makeFunction(name: "subtractKernel")
+	static let AddKernel = Matrix.DefaultLibrary?.makeFunction(name: "addKernel")
+	// Matrix-RowVector Kernels
+	static let HadamardProductRowVectorKernel = Matrix.DefaultLibrary?.makeFunction(name: "hadamardProductRowVectorKernel")
+	static let AddRowVectorKernel = Matrix.DefaultLibrary?.makeFunction(name: "addRowVectorKernel")
+	static let SubtractRowVectorKernel = Matrix.DefaultLibrary?.makeFunction(name: "subtractRowVectorKernel")
+	// Matrix-ColumnVector Kernels
+	static let HadamardProductColumnVectorKernel = Matrix.DefaultLibrary?.makeFunction(name: "hadamardProductColumnVectorKernel")
+	static let AddColumnVectorKernel = Matrix.DefaultLibrary?.makeFunction(name: "addColumnVectorKernel")
+	static let SubtractColumnVectorKernel = Matrix.DefaultLibrary?.makeFunction(name: "subtractColumnVectorKernel")
+	// Matrix-Scalar Kernels
+	static let MultiplyScalarKernel = Matrix.DefaultLibrary?.makeFunction(name: "multiplyScalarKernel")
+	static let AddScalarKernel = Matrix.DefaultLibrary?.makeFunction(name: "addScalarKernel")
+	static let SubtractScalarKernel = Matrix.DefaultLibrary?.makeFunction(name: "subtractScalarKernel")
+	// Common Parallel Operation Kernels
+	static let ExponentKernel = Matrix.DefaultLibrary?.makeFunction(name: "exponentKernel")
+
 	let dataTexture:MTLTexture
 	let width:Int
 	let height:Int
 	
 	init(data:[Float], width:Int, height:Int) {
+		// TODO: Build an init that accepts an array with a structure
 		self.width = width
 		self.height = height
 		let texDescriptor = MTLTextureDescriptor.textureBufferDescriptor(with: .r32Float,
@@ -40,6 +60,17 @@ struct Matrix {
 														 bytesPerRow: 64)
 	}
 	
+	// TODO: Implement transpose in shader or here?
+	// TODO: Implement sum() function
+	
+	// Overload Operators
+	// TODO: Overload the following operators
+	// https://www.raywenderlich.com/2271-operator-overloading-in-swift-tutorial
+	// +=, -=, ++, --,
+	// /, /=, *=,
+	// ^
+	// ==, !=, <, >, >=, <=
+	// @ (matrix multiply), ~ (dot product)
 	static func *(left:Matrix, right:Matrix) -> Matrix {
 		let result = Matrix(data:[Float](repeating: 0, count: left.width*left.height),
 												width:left.width,
