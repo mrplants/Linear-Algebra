@@ -15,12 +15,12 @@ let A = Matrix(data: [2,0,0,0,
 											0,0,0,2],
 							 width: 4,
 							 height: 4)
-let B = Matrix(data: [1,0,0,0,
-											0,2,0,0,
-											0,0,3,0,
-											0,0,0,4],
+let B = Matrix(data: [0,0,0,0,
+											0,0,0,0,
+											0,0,0,0,
+											0,0,0,10],
 							 width: 4,
 							 height: 4)
 
-let C = A * B
+let C = A + B
 print("done")

@@ -60,24 +60,74 @@ struct Matrix {
 														 bytesPerRow: 64)
 	}
 	
-	// TODO: Implement transpose in shader or here?
+	// TODO: Implement transpose in shader or here???
 	// TODO: Implement sum() function
+	// TODO: Protect each function against incorrect dimensions for arguments
 	
 	// Overload Operators
 	// TODO: Overload the following operators
 	// https://www.raywenderlich.com/2271-operator-overloading-in-swift-tutorial
+	// * vector(Rx1, 1xC), + vector(Rx1, 1xC), - vector(Rx1, 1xC) (These should be special cases in the normal *, +, and - overloads)
 	// +=, -=, ++, --,
 	// /, /=, *=,
 	// ^
 	// ==, !=, <, >, >=, <=
-	// @ (matrix multiply), ~ (dot product)
+	// @ (matrix multiply), ~ (dot product), exp(Matrix)
 	static func *(left:Matrix, right:Matrix) -> Matrix {
+		if (left.width == right.width) && (left.height == right.height) {
+			return executeSymmetricResultKernel(left: left, right: right, function: self.HadamardKernel!)
+		} else if (right.width == 1) && (right.height == left.height) {
+			// TODO: Implement (below is incorrect)
+			return executeSymmetricResultKernel(left: left, right: right, function: self.HadamardKernel!)
+		} else if (right.height == 1) && (right.width == left.width) {
+			// TODO: Implement (below is incorrect)
+			return executeSymmetricResultKernel(left: left, right: right, function: self.HadamardKernel!)
+		} else {
+			// TODO: Make errors more descriptive
+			print("Argument error between left and right.")
+			exit(1)
+		}
+	}
+
+	static func +(left:Matrix, right:Matrix) -> Matrix {
+		if (left.width == right.width) && (left.height == right.height) {
+			return executeSymmetricResultKernel(left: left, right: right, function: self.HadamardKernel!)
+		} else if (right.width == 1) && (right.height == left.height) {
+			// TODO: Implement (below is incorrect)
+			return executeSymmetricResultKernel(left: left, right: right, function: self.HadamardKernel!)
+		} else if (right.height == 1) && (right.width == left.width) {
+			// TODO: Implement (below is incorrect)
+			return executeSymmetricResultKernel(left: left, right: right, function: self.HadamardKernel!)
+		} else {
+			// TODO: Make errors more descriptive
+			print("Argument error between left and right.")
+			exit(1)
+		}
+	}
+
+	static func -(left:Matrix, right:Matrix) -> Matrix {
+		if (left.width == right.width) && (left.height == right.height) {
+			return executeSymmetricResultKernel(left: left, right: right, function: self.HadamardKernel!)
+		} else if (right.width == 1) && (right.height == left.height) {
+			// TODO: Implement (below is incorrect)
+			return executeSymmetricResultKernel(left: left, right: right, function: self.HadamardKernel!)
+		} else if (right.height == 1) && (right.width == left.width) {
+			// TODO: Implement (below is incorrect)
+			return executeSymmetricResultKernel(left: left, right: right, function: self.HadamardKernel!)
+		} else {
+			// TODO: Make errors more descriptive
+			print("Argument error between left and right.")
+			exit(1)
+		}
+	}
+
+	static func executeSymmetricResultKernel(left:Matrix, right:Matrix, function:MTLFunction) -> Matrix {
 		let result = Matrix(data:[Float](repeating: 0, count: left.width*left.height),
 												width:left.width,
 												height:left.height)
 		do {
 			guard
-				let computePipelineState = try Matrix.GPU?.makeComputePipelineState(function: Matrix.HadamardKernel!),
+				let computePipelineState = try Matrix.GPU?.makeComputePipelineState(function: function),
 				let commandBuffer = Matrix.CommandQueue?.makeCommandBuffer(),
 				let computeEncoder = commandBuffer.makeComputeCommandEncoder()
 				else {
@@ -102,5 +152,5 @@ struct Matrix {
 			exit(EXIT_FAILURE)
 		}
 		return result
-	}
+		}
 }
